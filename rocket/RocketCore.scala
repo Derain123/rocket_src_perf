@@ -597,16 +597,21 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
     ex_reg_wphit := bpu.io.bpwatch.map { bpw => bpw.ivalid(0) }
 
     /*runahead code begin*/
-    ex_rh_load := id_ctrl.mem && id_ctrl.mem_cmd === M_XWR && (runahead_flag === true.B)
-    ex_rh_store := id_ctrl.mem && id_ctrl.mem_cmd === M_XRD && (runahead_flag === true.B)
+    ex_rh_load := id_ctrl.mem && id_ctrl.mem_cmd === M_XRD && (runahead_flag === true.B)
+    ex_rh_store := id_ctrl.mem && id_ctrl.mem_cmd === M_XWR && (runahead_flag === true.B)
     /*runahead code end*/
 
 
   }
 
   // replay inst in ex stage?
+    /*runahead code end*/
+  val ishit_rh = Reg(Bool())
+  val ex_rfinvfile_propogation = Wire(Bool())
+    /*runahead code end*/
   val ex_pc_valid = ex_reg_valid || ex_reg_replay || ex_reg_xcpt_interrupt
-  val wb_dcache_miss = wb_ctrl.mem && !io.dmem.resp.valid
+  val wb_dcache_miss = wb_ctrl.mem && !io.dmem.resp.valid && 
+  !(ishit_rh || ex_rh_load && ex_rfinvfile_propogation)
   val replay_ex_structural = ex_ctrl.mem && !io.dmem.req.ready ||
                              ex_ctrl.div && !div.io.req.ready
   val replay_ex_load_use = wb_dcache_miss && ex_reg_load_use
@@ -913,7 +918,6 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   /*runahead code begin*/
   val rhbuffer_data = RegInit(VecInit(Seq.fill(10)(0.U(64.W))))
   val hit_ptr = WireInit(0.U(5.W))
-  val ishit_rh = Reg(Bool())
   /*runahead code end*/
   val rf_waddr = Mux(ll_wen, ll_waddr, wb_waddr)
   val rf_wdata = 
@@ -1148,12 +1152,12 @@ class Rocket(tile: RocketTile)(implicit p: Parameters) extends CoreModule()(p)
   sboard.clear((runahead_flag === true.B) && s2_runahead_posedge, runahead_tag(6,2))//pretend stall for dependency
   val rf_invfile = new Scoreboard(32, true)
   rf_invfile.set((runahead_flag === true.B) && s1_runahead_posedge, runahead_tag(6,2))
-  val ex_rfinvfile_propogation = checkHazards(rh_hazard_targets, rd => rf_invfile.read(rd) && !id_sboard_clear_bypass(rd))
+  ex_rfinvfile_propogation := checkHazards(rh_hazard_targets, rd => rf_invfile.read(rd) && !id_sboard_clear_bypass(rd))
 
   rf_invfile.set((runahead_flag === true.B) && ex_rfinvfile_propogation, ex_waddr) //although invalid, it will still writeback to rf
   val rf_invfile_clear = Reg(Bool())
   rf_invfile_clear := !ctrl_killd || csr.io.interrupt || ibuf.io.inst(0).bits.replay
-  rf_invfile.clear((runahead_flag === true.B) && !ex_rfinvfile_propogation && !s1_runahead_posedge && !rf_invfile_clear, ex_waddr) // to do: add a ctrl_sig, judge if a load addr is valid
+  rf_invfile.clear((runahead_flag === true.B) && !ex_rfinvfile_propogation && !s1_runahead_posedge && rf_invfile_clear, ex_waddr) // to do: add a ctrl_sig, judge if a load addr is valid
   val invfile = WireInit(VecInit(Seq.fill(31)(0.U(1.W))))
   for(i <- 0 until 31) {
     invfile(i) := rf_invfile.read(i.U).asUInt()
